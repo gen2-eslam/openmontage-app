@@ -10,6 +10,7 @@ const { Projects } = require('./main/projects');
 const { Runtime } = require('./main/runtime');
 const { STT } = require('./main/stt');
 const { Addons } = require('./main/addons');
+const { HyperFrames } = require('./main/hyperframes');
 
 fixPath();
 
@@ -29,6 +30,10 @@ const runtime = new Runtime();
 runtime.applyEnv(om.root);
 const stt = new STT({ om, runtime, settings, userData });
 const addons = new Addons({ om, runtime, projects, userData });
+const hf = new HyperFrames({ projects, runtime, log: (t) => engineLog(t) });
+const { HFTools } = require('./main/hftools');
+const hft = new HFTools({ hf, om, runtime, projects, addons, userData, log: (t) => engineLog(t) });
+addons.hft = hft;
 
 // ---------------- engine log (UI + file + stdout in debug) ----------------
 const logDir = path.join(userData, 'logs');
@@ -46,7 +51,7 @@ async function provisionIfNeeded() {
   setEngine({ busy: 'provision', error: null });
   try {
     await runtime.provision(om.root, engineLog);
-    await addons.ensure(engineLog);
+    await addons.ensure(engineLog); await hft.ensure();
     projects.pyOk = null;
     projects.watch(id => send('project:changed', id));
     setEngine({ busy: null });
@@ -76,7 +81,7 @@ async function updateEngine() {
   try {
     if (runtime.engineMeta(om.root)) await runtime.update(om.root, engineLog);
     else await om.update(engineLog);
-    await addons.ensure(engineLog);
+    await addons.ensure(engineLog); await hft.ensure();
     projects.pyOk = null;
     setEngine({ busy: null, update: { available: false, updatedAt: Date.now() } });
     send('om:updated', true);
@@ -169,6 +174,17 @@ function saveSession(pid, s) {
   fs.writeFileSync(sessionFile(pid), JSON.stringify(s, null, 2));
 }
 
+
+const QUESTION_FORMAT = [
+  'When you need the user to decide something (approval gates, concept/voice/style choices, missing info), ask with this exact block so the studio shows clickable choices, then END your turn:',
+  '<studio-question id="q1" multi="false">',
+  'The question in one line?',
+  '- [A] First option — one short line on what it means',
+  '- [B] Second option — …',
+  '</studio-question>',
+  'Rules: 2–6 options, put your recommended option first and end its label with "(Recommended)", multi="true" only when several can be picked, one block per question (ids q1, q2…). The user may also answer in their own words.',
+].join('\n');
+
 function buildPrompt({ projectId, pipeline, message, focus, firstTurn, title, notes }) {
   const lines = [];
   if (firstTurn) {
@@ -185,12 +201,15 @@ function buildPrompt({ projectId, pipeline, message, focus, firstTurn, title, no
       'The user watches your checkpoints, artifacts, assets and renders live in a desktop canvas; you do NOT need to run `python -m backlot open`.',
       'At every human approval gate: write the checkpoint with status "awaiting_human", summarize the decision clearly, then END your turn. The user replies in the next turn.',
       'Run non-interactively: never wait for keyboard input.',
+      QUESTION_FORMAT,
       'Free voiceover is available with no API key: the `edge_tts` tool (registry / tts_selector) and the MCP server `openmontage-studio` (tts_synthesize). It covers Arabic dialects (Egyptian ar-EG, Saudi, Gulf, Levantine, Maghrebi) and 70+ languages, with word timings for captions — see the edge-tts skill.',
+      'HyperFrames is installed locally: run `hyperframes <command>` (already on PATH, offline, telemetry off; write `hyperframes`, not `npx hyperframes`). Skills: hyperframes, hyperframes-cli, media-use. Useful free commands: `hyperframes tts "<text>" -v <voice> -o out.wav` (Kokoro-82M, the most natural free voice for English, Spanish, French, Italian, Hindi, Portuguese, Japanese, Chinese — NO Arabic: use edge_tts for Arabic), `hyperframes transcribe <audio> --json` (word timings/captions), `hyperframes catalog --json` + `hyperframes add <name>` (448 ready blocks/components: captions styles, transitions, title cards, charts, mock UIs), `hyperframes capture <url> --json` (real screens/assets of a website), `hyperframes remove-background`, `hyperframes beats`, `hyperframes check --json`, `hyperframes snapshot`. Skip cloud/billing commands (cloud, lambda, publish, share, templates) unless the user asks.',
       '',
     );
   } else if (projectId) {
     lines.push(`[OpenMontage Studio] Active project: "${projectId}" (projects/${projectId}/).`);
   }
+  if (!firstTurn) lines.push('To ask the user something, use the <studio-question> block format (options as - [A] …) and end your turn.');
   if (projectId) {
     lines.push(`Checkpoints: call write_checkpoint/read_checkpoint/get_next_stage with pipeline_dir = lib.checkpoint.PROJECTS_DIR (the projects/ ROOT, never projects/${projectId}) and project_id "${projectId}", so files land at projects/${projectId}/checkpoint_<stage>.json.`);
   }
@@ -210,7 +229,7 @@ const activeRuns = new Map(); // projectKey -> runId
 ipcMain.handle('chat:history', (_, pid) => loadSession(pid));
 ipcMain.handle('chat:clear', (_, pid) => { saveSession(pid, { agentIds: {}, messages: [] }); return true; });
 
-ipcMain.handle('chat:send', async (_, { projectId, agentId, message, focus, focusLabels, pipeline, title }) => {
+ipcMain.handle('chat:send', async (_, { projectId, agentId, message, focus, focusLabels, pipeline, title, model }) => {
   const key = projectId || '_home';
   if (activeRuns.has(key)) throw new Error('The agent is still working on this project. Stop it first or wait.');
   const sess = loadSession(projectId);
@@ -218,7 +237,7 @@ ipcMain.handle('chat:send', async (_, { projectId, agentId, message, focus, focu
   const notes = projectId ? projects.takeNotes(projectId) : [];
   const prompt = buildPrompt({ projectId, pipeline, message, focus, title, notes, firstTurn: !sessionId });
   const userMsg = { role: 'user', text: message, focus: focusLabels || [], ts: Date.now() };
-  const reply = { role: 'assistant', agent: agentId, parts: [], ts: Date.now(), done: false };
+  const reply = { role: 'assistant', agent: agentId, model: model || null, parts: [], ts: Date.now(), done: false };
   sess.messages.push(userMsg, reply);
   saveSession(projectId, sess);
 
@@ -243,8 +262,8 @@ ipcMain.handle('chat:send', async (_, { projectId, agentId, message, focus, focu
 
   const runId = agents.start({
     agentId, prompt, cwd: om.isRepo() ? om.root : (projectId ? path.join(projects.dir, projectId) : app.getPath('home')),
-    session: sessionId, autoApprove: settings.get('autoApprove', true), extraArgs: (a) => addons.agentArgs(a),
-    env: { OPENMONTAGE_PROJECTS_DIR: projects.dir },
+    session: sessionId, autoApprove: settings.get('autoApprove', true), extraArgs: (a) => addons.agentArgs(a), model: model || undefined,
+    env: { OPENMONTAGE_PROJECTS_DIR: projects.dir, ...hft.agentEnv() },
   }, emit);
   activeRuns.set(key, runId);
   return { runId };
@@ -277,7 +296,7 @@ ipcMain.handle('om:setup', async () => {
     setEngine({ busy: 'provision', error: null });
     try { await om.setup(engineLog); runtime.applyEnv(om.root); } finally { setEngine({ busy: null }); }
   }
-  await addons.ensure(engineLog);
+  await addons.ensure(engineLog); await hft.ensure();
   projects.pyOk = null;
   projects.watch(id => send('project:changed', id));
   return om.status();
@@ -356,6 +375,41 @@ ipcMain.handle('stt:openMicSettings', () => {
   else if (process.platform === 'win32') shell.openExternal('ms-settings:privacy-microphone');
 });
 
+// ---------------- HyperFrames: preview + export ----------------
+ipcMain.handle('hf:preview', (_, id, o) => hf.preview(id, o || {}));
+ipcMain.handle('hf:playerScript', () => require('url').pathToFileURL(hf.playerScript()).href);
+ipcMain.handle('hf:export', (_, o) => hf.exportVideo(o, (ev) => send('hf:progress', ev)));
+ipcMain.handle('hf:cancel', (_, jobId) => hf.cancel(jobId));
+ipcMain.handle('voice:missing', async (_, id) => addons.missingVoice(await projects.state(id)));
+ipcMain.handle('voice:fix', async (_, id, o) => {
+  if (activeRuns.has(id)) throw new Error('Wait for the agent to finish this turn first.');
+  const st = await projects.state(id);
+  const r = await addons.fixVoice(st, o || {}, (p) => send('voice:progress', { projectId: id, ...p }));
+  send('project:changed', id);
+  return r;
+});
+
+// ---------------- HyperFrames tools ----------------
+const hftJob = (id, fn) => async (...a) => {
+  const res = await fn(...a);
+  if (id) send('project:changed', typeof id === 'function' ? id(...a) : id);
+  return res;
+};
+const hftLog = (projectId, tool) => (line) => send('hft:log', { projectId, tool, line: String(line).replace(/\x1b\[[0-9;]*m/g, '').slice(0, 400) });
+ipcMain.handle('hft:status', () => hft.status());
+ipcMain.handle('hft:voices', () => hft.voices());
+ipcMain.handle('hft:installKokoro', () => hft.installKokoro((p) => send('hft:kokoro', p)));
+ipcMain.handle('hft:preview', (_, o) => hft.preview(o || {}));
+ipcMain.handle('hft:speak', (_, id, o) => hftJob(id, () => hft.speak(id, o || {}))());
+ipcMain.handle('hft:transcribe', (_, id, rel, o) => hftJob(id, () => hft.transcribe(id, rel, o || {}, hftLog(id, 'transcribe')))());
+ipcMain.handle('hft:removeBg', (_, id, rel, o) => hftJob(id, () => hft.removeBackground(id, rel, o || {}, hftLog(id, 'removeBg')))());
+ipcMain.handle('hft:beats', (_, id, rel) => hft.beats(id, rel));
+ipcMain.handle('hft:snapshot', (_, id, o) => hft.snapshot(id, o || {}));
+ipcMain.handle('hft:check', (_, id) => hft.check(id));
+ipcMain.handle('hft:catalog', () => hft.catalog());
+ipcMain.handle('hft:add', (_, id, name) => hftJob(id, () => hft.addBlock(id, name))());
+ipcMain.handle('hft:capture', (_, id, url) => hftJob(id, () => hft.capture(id, url, hftLog(id, 'capture')))());
+
 // ---------------- Add-ons ----------------
 ipcMain.handle('addons:state', () => addons.state);
 ipcMain.handle('addons:ensure', () => addons.ensure(engineLog));
@@ -387,7 +441,7 @@ ipcMain.handle('term:start', (_, { cmd, args, cols, rows }) => {
   const id = Math.random().toString(36).slice(2);
   const p = pty.spawn(which(shellCmd) || shellCmd, args || [], {
     name: 'xterm-256color', cols: cols || 100, rows: rows || 30,
-    cwd: om.isRepo() ? om.root : app.getPath('home'), env: { ...process.env, OPENMONTAGE_PROJECTS_DIR: projects.dir },
+    cwd: om.isRepo() ? om.root : app.getPath('home'), env: { ...process.env, OPENMONTAGE_PROJECTS_DIR: projects.dir, ...hft.agentEnv() },
   });
   p.onData(d => send('term:data', { id, data: d }));
   p.onExit(({ exitCode }) => { terms.delete(id); send('term:exit', { id, code: exitCode }); });
@@ -417,7 +471,7 @@ app.whenReady().then(() => {
   // First launch with a bundled engine: install it silently. Then check for updates.
   setTimeout(async () => {
     await provisionIfNeeded();
-    await addons.ensure(engineLog);
+    await addons.ensure(engineLog); await hft.ensure();
     setTimeout(() => checkEngineUpdate({ auto: true }), 5000);
     setInterval(() => checkEngineUpdate({ auto: true }), 6 * 3600 * 1000);
   }, 1200);
@@ -427,6 +481,7 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   agents.stopAll();
   stt.stopWorker();
+  hf.stop();
   for (const t of terms.values()) try { t.kill(); } catch {}
   if (backlotProc) try { backlotProc.kill(); } catch {}
 });

@@ -26,6 +26,16 @@ contextBridge.exposeInMainWorld('om', {
     onChanged: on('project:changed'),
   },
   settings: { get: inv('settings:get'), set: inv('settings:set') },
+  hf: {
+    preview: inv('hf:preview'), playerScript: inv('hf:playerScript'), export: inv('hf:export'), cancel: inv('hf:cancel'), onProgress: on('hf:progress'),
+  },
+  voice: { missing: inv('voice:missing'), fix: inv('voice:fix'), onProgress: on('voice:progress') },
+  hft: {
+    status: inv('hft:status'), voices: inv('hft:voices'), installKokoro: inv('hft:installKokoro'), onKokoro: on('hft:kokoro'),
+    preview: inv('hft:preview'), speak: inv('hft:speak'), transcribe: inv('hft:transcribe'), removeBg: inv('hft:removeBg'),
+    beats: inv('hft:beats'), snapshot: inv('hft:snapshot'), check: inv('hft:check'), catalog: inv('hft:catalog'),
+    add: inv('hft:add'), capture: inv('hft:capture'), onLog: on('hft:log'),
+  },
   addons: { state: inv('addons:state'), ensure: inv('addons:ensure'), ttsPreview: inv('addons:ttsPreview'), ttsVoices: inv('addons:ttsVoices') },
   stt: {
     status: inv('stt:status'), transcribe: inv('stt:transcribe'), enableLocal: inv('stt:enableLocal'),

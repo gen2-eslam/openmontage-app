@@ -30,6 +30,10 @@
       "package.json"
     ],
     "asarUnpack": [
+      "**/node_modules/@hyperframes/**",
+      "**/node_modules/@puppeteer/**",
+      "**/node_modules/gsap/**",
+      "**/node_modules/hyperframes/**",
       "**/node_modules/node-pty/**",
       "src/addons/**"
     ],
@@ -78,6 +82,9 @@
     ]
   },
   "dependencies": {
+    "@hyperframes/player": "^0.9.36",
+    "gsap": "^3.15.1",
+    "hyperframes": "^0.9.36",
     "js-yaml": "^4.3.2"
   },
   "optionalDependencies": {

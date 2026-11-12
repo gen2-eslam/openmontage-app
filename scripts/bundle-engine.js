@@ -7,7 +7,9 @@
 //     runtime/bin/         ffmpeg + ffprobe
 //     wheels/              every Python wheel OpenMontage needs (offline install)
 //     engine/              OpenMontage source + remotion-composer/node_modules
+//     runtime/chrome/      chrome-headless-shell for HyperFrames export
 //     models/              faster-whisper model for offline voice input (OM_BUNDLE_STT_MODEL=small|none)
+//                          + kokoro/ (HyperFrames' Kokoro-82M voice model, OM_BUNDLE_KOKORO=none to skip)
 //     bundle.json          versions + engine commit
 //
 // Usage: node scripts/bundle-engine.js [--force]
@@ -152,9 +154,30 @@ async function wheels() {
   const req = path.join(OUT, 'engine', 'requirements.txt');
   fs.mkdirSync(dir, { recursive: true });
   log('pip download → wheels/');
-  sh(pyBin(), ['-m', 'pip', 'download', '--only-binary=:all:', '--prefer-binary', '-d', dir, '-r', req, 'piper-tts', 'faster-whisper', 'edge-tts', 'mcp', 'pip', 'setuptools', 'wheel'], { env: bundleEnv() });
+  sh(pyBin(), ['-m', 'pip', 'download', '--only-binary=:all:', '--prefer-binary', '-d', dir, '-r', req, 'piper-tts', 'faster-whisper', 'edge-tts', 'mcp', 'kokoro-onnx', 'soundfile', 'pip', 'setuptools', 'wheel'], { env: bundleEnv() });
   // Some packages publish only sdists — build wheels for anything pip couldn't fetch as binary.
   log('wheels:', fs.readdirSync(dir).length, 'files');
+}
+
+// ---------------- Chrome for HyperFrames export ----------------
+async function chrome() {
+  const dir = path.join(RT, 'chrome');
+  const exe = IS_WIN ? 'chrome-headless-shell.exe' : 'chrome-headless-shell';
+  const find = (d, depth = 6) => {
+    if (depth < 0 || !fs.existsSync(d)) return null;
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isFile() && e.name === exe) return p;
+      if (e.isDirectory()) { const f = find(p, depth - 1); if (f) return f; }
+    }
+    return null;
+  };
+  if (find(dir) && !FORCE) return log('chrome-headless-shell: present');
+  const cli = path.join(__dirname, '..', 'node_modules', '@puppeteer', 'browsers', 'lib', 'main-cli.js');
+  if (!fs.existsSync(cli)) return log('chrome skipped (run npm install first) — it will download on first export');
+  log('chrome-headless-shell: downloading');
+  sh(nodeBin(), [cli, 'install', 'chrome-headless-shell@stable', '--path', dir], { env: bundleEnv() });
+  log('chrome-headless-shell:', find(dir));
 }
 
 // ---------------- Whisper model for offline voice input ----------------
@@ -174,6 +197,20 @@ async function sttModel() {
   return name;
 }
 
+// ---------------- Kokoro-82M (HyperFrames' local voice model) ----------------
+async function kokoroModel() {
+  if (process.env.OM_BUNDLE_KOKORO === 'none') return null;
+  const dest = path.join(OUT, 'models', 'kokoro');
+  fs.mkdirSync(dest, { recursive: true });
+  const base = 'https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/';
+  for (const f of ['kokoro-v1.0.onnx', 'voices-v1.0.bin']) {
+    if (fs.existsSync(path.join(dest, f)) && !FORCE) continue;
+    log('kokoro: downloading', f);
+    await download(base + f, path.join(dest, f));
+  }
+  return 'kokoro-v1.0';
+}
+
 function readMeta() { try { return JSON.parse(fs.readFileSync(path.join(OUT, 'bundle.json'), 'utf8')); } catch { return {}; } }
 
 (async () => {
@@ -191,11 +228,14 @@ function readMeta() { try { return JSON.parse(fs.readFileSync(path.join(OUT, 'bu
     log('binary-only download failed, retrying with sdists allowed:', e.message);
     sh(pyBin(), ['-m', 'pip', 'wheel', '-w', path.join(OUT, 'wheels'), '-r', path.join(OUT, 'engine', 'requirements.txt'), 'piper-tts'], { env: bundleEnv() });
   }
+  try { await chrome(); } catch (e) { log('chrome skipped:', e.message); }
   let stt = null;
   try { stt = await sttModel(); } catch (e) { log('whisper model skipped:', e.message); }
+  let kokoro = null;
+  try { kokoro = await kokoroModel(); } catch (e) { log('kokoro model skipped:', e.message); }
   const pyv = execFileSync(pyBin(), ['--version']).toString().trim();
   const nodev = execFileSync(nodeBin(), ['--version']).toString().trim();
-  const meta = { builtAt: new Date().toISOString(), target: `${OS}-${ARCH}`, python: pyv, node: nodev, engine: eng, sttModel: stt };
+  const meta = { builtAt: new Date().toISOString(), target: `${OS}-${ARCH}`, python: pyv, node: nodev, engine: eng, sttModel: stt, kokoro };
   fs.writeFileSync(path.join(OUT, 'bundle.json'), JSON.stringify(meta, null, 2));
   fs.rmSync(TMP, { recursive: true, force: true });
   log('✅ bundle ready:', JSON.stringify(meta));

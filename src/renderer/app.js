@@ -450,8 +450,32 @@
         ok ? h('div.row', h('div.l', 'Try a voice', h('small', 'Write the text in the dialect you pick — the voice gives the accent.')), dialect, gender, voiceIn) : null,
         ok ? h('div', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start', padding: '4px 0 8px' } }, text, play) : null,
         ok ? player : null,
-        h('div.muted', { style: { fontSize: '11.5px' } }, 'Agents get it as: the edge_tts tool in OpenMontage, the edge-tts skill, and the MCP server "openmontage-studio" (Claude Code, Codex, Gemini, Cursor, OpenCode, Qwen).')].filter(Boolean));
+        h('div.muted', { style: { fontSize: '11.5px' } }, 'Agents get it as: the edge_tts tool in OpenMontage, the edge-tts skill, and the MCP server "openmontage-studio" (Claude Code, Codex, Gemini, Cursor, OpenCode, Qwen).'),
+        h('div', { style: { height: '1px', background: 'var(--line)', margin: '14px 0 6px' } }),
+        h('div.row', h('div.l', 'Kokoro — HyperFrames voices', h('small', 'The local model HyperFrames uses (Kokoro-82M): the most natural free voice for English, Spanish, French, Italian, Hindi, Portuguese, Japanese and Chinese. Offline. No Arabic — Arabic stays on Edge TTS.'))),
+        HFToolsUI.kokoroStatus((ks) => kokoroTry.classList.remove('hidden')),
+        kokoroTry,
+        hfRow].filter(Boolean));
     };
+    const kokoroTry = h('div.hidden', { style: { display: 'flex', gap: '8px', alignItems: 'center', padding: '8px 0' } });
+    HFToolsUI.voiceSelect().then((vs) => {
+      vs.style.width = '240px';
+      const txt = h('input.input', { value: 'Every night, the keeper climbs one hundred and twelve stairs to light the lamp.', style: { flex: 1 } });
+      const b = h('button.btn.sm.primary', icon('play'), 'Listen');
+      b.onclick = async () => {
+        b.disabled = true;
+        try { await HFToolsUI.playBytes(await window.om.hft.preview({ text: txt.value, voice: vs.value }), 'audio/wav'); }
+        catch (e) { toast(String(e.message).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'err'); }
+        b.disabled = false;
+      };
+      kokoroTry.replaceChildren(vs, txt, b);
+    }).catch(() => {});
+    const hfRow = h('div.muted', { style: { fontSize: '11.5px', paddingTop: '4px' } }, 'Checking HyperFrames…');
+    window.om.hft.status().then((st) => {
+      hfRow.textContent = st.cli
+        ? `HyperFrames ${st.skills ? 'skills installed' : 'skills pending'} · \`hyperframes\` command ${st.shim ? 'available' : 'pending'} for agents (transcribe, catalog/add, capture, remove-background, beats, check, snapshot). Open a project → HyperFrames tools.`
+        : 'HyperFrames needs Node 22 — run npm run bundle, or install Node 22+.';
+    }).catch(() => {});
     window.om.addons.ensure().catch(() => {}).then(draw).catch(e => body.replaceChildren(h('div.muted', e.message)));
     return card;
   }

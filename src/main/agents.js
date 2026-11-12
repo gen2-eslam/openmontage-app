@@ -17,15 +17,26 @@ const crypto = require('crypto');
  */
 const PRESETS = [
   {
-    id: 'claude', npm: '@anthropic-ai/claude-code', selfUpdate: ['update'], name: 'Claude Code', vendor: 'Anthropic', cmd: 'claude', color: '#d97757',
+    id: 'claude', modelArgs: ['--model', '{model}'], models: [
+      { id: 'opus', label: 'Opus', note: 'Most capable — complex productions' },
+      { id: 'sonnet', label: 'Sonnet', note: 'Fast and strong — good default' },
+      { id: 'haiku', label: 'Haiku', note: 'Fastest and cheapest' },
+      { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', note: 'Pinned version' },
+      { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', note: 'Pinned version' },
+      { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5', note: 'Pinned version' },
+      { id: 'claude-fable-5-2', label: 'Claude Fable 5.2', note: 'Mythos-tier (if your plan includes it)' },
+    ],
+    npm: '@anthropic-ai/claude-code', selfUpdate: ['update'], name: 'Claude Code', vendor: 'Anthropic', cmd: 'claude', color: '#d97757',
     args: ['-p', '{prompt}', '--output-format', 'stream-json', '--verbose'],
     resumeArgs: ['-p', '{prompt}', '--output-format', 'stream-json', '--verbose', '--resume', '{session}'],
     autoArgs: ['--permission-mode', 'bypassPermissions'],
+    alwaysArgs: ['--disallowedTools', 'AskUserQuestion'],
     safeArgs: ['--permission-mode', 'acceptEdits'],
     format: 'claude-stream', install: 'npm install -g @anthropic-ai/claude-code', login: [], version: ['--version'],
   },
   {
-    id: 'codex', npm: '@openai/codex', selfUpdate: null, name: 'Codex CLI', vendor: 'OpenAI', cmd: 'codex', color: '#10a37f',
+    id: 'codex', modelArgs: ['-m', '{model}'], models: [],
+    npm: '@openai/codex', selfUpdate: null, name: 'Codex CLI', vendor: 'OpenAI', cmd: 'codex', color: '#10a37f',
     args: ['exec', '--json', '--skip-git-repo-check', '{prompt}'],
     resumeArgs: ['exec', '--json', '--skip-git-repo-check', 'resume', '{session}', '{prompt}'],
     autoArgs: ['--dangerously-bypass-approvals-and-sandbox'],
@@ -33,31 +44,39 @@ const PRESETS = [
     format: 'codex-json', install: 'npm install -g @openai/codex', login: ['login'], version: ['--version'],
   },
   {
-    id: 'gemini', npm: '@google/gemini-cli', selfUpdate: null, name: 'Gemini CLI', vendor: 'Google', cmd: 'gemini', color: '#4f8df5',
+    id: 'gemini', modelArgs: ['-m', '{model}'], models: [
+      { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+      { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+    ],
+    npm: '@google/gemini-cli', selfUpdate: null, name: 'Gemini CLI', vendor: 'Google', cmd: 'gemini', color: '#4f8df5',
     args: ['-p', '{prompt}', '--output-format', 'stream-json'],
     resumeArgs: ['-p', '{prompt}', '--output-format', 'stream-json', '--resume', '{session}'],
     autoArgs: ['--yolo'], safeArgs: ['--approval-mode', 'auto_edit'],
     format: 'gemini-stream', install: 'npm install -g @google/gemini-cli', login: [], version: ['--version'],
   },
   {
-    id: 'cursor', name: 'Cursor Agent', vendor: 'Cursor', cmd: 'cursor-agent', color: '#e8e8e8',
+    id: 'cursor', modelArgs: ['--model', '{model}'], models: [],
+    name: 'Cursor Agent', vendor: 'Cursor', cmd: 'cursor-agent', color: '#e8e8e8',
     args: ['-p', '{prompt}', '--output-format', 'stream-json'],
     resumeArgs: ['-p', '{prompt}', '--output-format', 'stream-json', '--resume', '{session}'],
     autoArgs: ['--force'], safeArgs: [],
     format: 'claude-stream', install: 'curl https://cursor.com/install -fsS | bash', login: ['login'], version: ['--version'],
   },
   {
-    id: 'opencode', npm: 'opencode-ai', selfUpdate: null, name: 'OpenCode', vendor: 'sst', cmd: 'opencode', color: '#f5a524',
+    id: 'opencode', modelArgs: ['-m', '{model}'], models: [],
+    npm: 'opencode-ai', selfUpdate: null, name: 'OpenCode', vendor: 'sst', cmd: 'opencode', color: '#f5a524',
     args: ['run', '{prompt}'], resumeArgs: ['run', '--session', '{session}', '{prompt}'],
     autoArgs: [], safeArgs: [], format: 'text', install: 'npm install -g opencode-ai', login: ['auth', 'login'], version: ['--version'],
   },
   {
-    id: 'copilot', npm: '@github/copilot', selfUpdate: null, name: 'GitHub Copilot CLI', vendor: 'GitHub', cmd: 'copilot', color: '#8957e5',
+    id: 'copilot', modelArgs: ['--model', '{model}'], models: [],
+    npm: '@github/copilot', selfUpdate: null, name: 'GitHub Copilot CLI', vendor: 'GitHub', cmd: 'copilot', color: '#8957e5',
     args: ['-p', '{prompt}'], resumeArgs: ['-p', '{prompt}', '--resume', '{session}'],
     autoArgs: ['--allow-all-tools'], safeArgs: [], format: 'text', install: 'npm install -g @github/copilot', login: [], version: ['--version'],
   },
   {
-    id: 'qwen', npm: '@qwen-code/qwen-code', selfUpdate: null, name: 'Qwen Code', vendor: 'Alibaba', cmd: 'qwen', color: '#615ced',
+    id: 'qwen', modelArgs: ['-m', '{model}'], models: [],
+    npm: '@qwen-code/qwen-code', selfUpdate: null, name: 'Qwen Code', vendor: 'Alibaba', cmd: 'qwen', color: '#615ced',
     args: ['-p', '{prompt}'], resumeArgs: ['-p', '{prompt}'],
     autoArgs: ['--yolo'], safeArgs: [], format: 'text', install: 'npm install -g @qwen-code/qwen-code', login: [], version: ['--version'],
   },
@@ -115,6 +134,7 @@ class AgentManager {
       resumeArgs: agent.resumeArgs && agent.resumeArgs.length ? agent.resumeArgs : (agent.args || ['{prompt}']),
       autoArgs: agent.autoArgs || [], safeArgs: agent.safeArgs || [],
       format: agent.format || 'text', install: agent.install || '', login: agent.login || [], version: agent.version || ['--version'],
+      modelArgs: agent.modelArgs && agent.modelArgs.length ? agent.modelArgs : ['--model', '{model}'], models: agent.models || [],
       env: agent.env || {},
     };
     const i = list.findIndex(a => a.id === id);
@@ -133,12 +153,13 @@ class AgentManager {
    *  {type:'tool_result', text, isError} {type:'result', costUsd, durationMs, text}
    *  {type:'stderr', text} {type:'exit', code}
    */
-  start({ agentId, prompt, cwd, session, autoApprove, env, extraArgs }, emit) {
+  start({ agentId, prompt, cwd, session, autoApprove, env, extraArgs, model }, emit) {
     const agent = this.get(agentId);
     if (!agent) throw new Error('Unknown agent: ' + agentId);
     const vars = { prompt, session: session || '' };
     let args = fill(session ? agent.resumeArgs : agent.args, vars);
-    const mode = [...fill(autoApprove ? (agent.autoArgs || []) : (agent.safeArgs || []), vars), ...(extraArgs ? extraArgs(agent) : [])];
+    const modelArgs = model && agent.modelArgs ? fill(agent.modelArgs, { model }) : [];
+    const mode = [...fill(autoApprove ? (agent.autoArgs || []) : (agent.safeArgs || []), vars), ...modelArgs, ...(agent.alwaysArgs || []), ...(extraArgs ? extraArgs(agent) : [])];
     // Option flags must come before positional args for some CLIs (codex exec <flags> <prompt>).
     if (agent.format === 'codex-json') args = [args[0], ...mode, ...args.slice(1)];
     else args = [...args, ...mode];
@@ -223,6 +244,17 @@ function toolDetail(input) {
   return short(input.command || input.file_path || input.path || input.pattern || input.url || input.description || input.prompt || input);
 }
 
+function isQuestionTool(name, input) {
+  return /ask.?user|question/i.test(name || '') && input && Array.isArray(input.questions);
+}
+function normQuestions(input) {
+  return (input.questions || []).map((q, i) => ({
+    id: q.id || 'q' + (i + 1), question: q.question || q.text || '', header: q.header || '',
+    multi: !!(q.multiSelect || q.multi), options: (q.options || []).map((o, j) => typeof o === 'string'
+      ? { key: String.fromCharCode(65 + j), label: o } : { key: o.key || String.fromCharCode(65 + j), label: o.label || o.text || '', description: o.description || '' }),
+  }));
+}
+
 function makeParser(format, emit) {
   if (format === 'text') return line => emit({ type: 'text', text: line + '\n', delta: true });
 
@@ -237,6 +269,7 @@ function makeParser(format, emit) {
     if (m.type === 'assistant' && m.message && Array.isArray(m.message.content)) {
       for (const c of m.message.content) {
         if (c.type === 'text' && c.text) emit({ type: 'text', text: c.text });
+        else if (c.type === 'tool_use' && isQuestionTool(c.name, c.input)) emit({ type: 'question', source: 'tool', questions: normQuestions(c.input) });
         else if (c.type === 'tool_use') emit({ type: 'tool', name: c.name, detail: toolDetail(c.input) });
       }
       return;

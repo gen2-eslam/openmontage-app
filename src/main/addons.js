@@ -113,6 +113,112 @@ class Addons {
     return [];
   }
 
+
+  /** Narration files the asset manifest promises but that don't exist on disk. */
+  missingVoice(state) {
+    const A = state.artifacts || {};
+    const manifest = (A.asset_manifest && A.asset_manifest.assets) || [];
+    const scenes = (state.storyboard && state.storyboard.scenes) || [];
+    const sections = (A.script && A.script.sections) || [];
+    const planScenes = (A.scene_plan && A.scene_plan.scenes) || [];
+    return manifest.filter(a => /narration|voice/i.test(a.type || '') && a.path && !fs.existsSync(path.join(state.dir, a.path)))
+      .map((a, i) => {
+        const sc = scenes.find(s => s.id === a.scene_id) || {};
+        const plan = planScenes.find(s => s.id === a.scene_id) || {};
+        const sec = sections.find(x => x.id === (plan.script_section || sc.script_section) || x.scene_id === a.scene_id)
+          || sections.find(x => typeof x.start_seconds === 'number' && typeof sc.start_seconds === 'number' && x.start_seconds <= sc.start_seconds && sc.start_seconds < x.end_seconds)
+          || sections[i];
+        const text = (a.text || a.script || sc.narration || (sec && sec.text) || plan.narration || '').trim();
+        return { id: a.id, scene_id: a.scene_id, path: a.path, text, provider: a.provider || a.source_tool || '' };
+      });
+  }
+
+  /**
+   * Generate missing narration at the manifest paths (+ word timings for captions).
+   * engine: 'auto' (Kokoro when installed, Edge for Arabic lines) | 'kokoro' | 'edge'.
+   * Kokoro (HyperFrames' local model) has no Arabic, so Arabic lines always go to Edge TTS.
+   */
+  async fixVoice(state, { engine = 'auto', dialect = 'egyptian', gender = 'male', voice, rate, kokoroVoice, speed } = {}, onProgress = () => {}) {
+    const py = this.venvPython();
+    if (!py) throw new Error('OpenMontage is not set up yet');
+    await this.ensure();
+    const missing = this.missingVoice(state).filter(m => m.text);
+    if (!missing.length) return { generated: 0 };
+    let kokoroReady = false;
+    if (this.hft && engine !== 'edge') {
+      try { kokoroReady = (await this.hft.status()).kokoro.ready; } catch {}
+      if (!kokoroReady && engine === 'kokoro') {
+        onProgress({ done: 0, total: missing.length, current: 'Installing Kokoro voices (one time)' });
+        await this.hft.installKokoro((p) => onProgress({ done: 0, total: missing.length, current: p.message + (p.pct ? ` ${p.pct}%` : '') }));
+        kokoroReady = true;
+      }
+    }
+    const plan = missing.map(m => ({ ...m, engine: this.hft ? this.hft.pickEngine(m.text, engine, kokoroReady) : 'edge' }));
+    let done = 0;
+    const fails = [];
+    const used = new Set();
+
+    // 1) Kokoro lines, one model load for all of them
+    const kItems = plan.filter(m => m.engine === 'kokoro');
+    if (kItems.length) {
+      const kv = kokoroVoice || (gender === 'female' ? 'af_heart' : 'am_michael');
+      onProgress({ done, total: missing.length, current: kItems[0].path });
+      const jobs = kItems.map(m => {
+        const out = path.join(state.dir, m.path);
+        return { m, out, wav: /\.wav$/i.test(out) ? out : out.replace(/\.\w+$/, '') + '.kokoro.wav' };
+      });
+      const res = await this.hft.kokoro(jobs.map(j => ({ text: j.m.text, out: j.wav, voice: kv, speed: speed || 1 })),
+        (r, n) => onProgress({ done: done + n, total: missing.length, current: (jobs[n] && jobs[n].m.path) || null }));
+      for (const j of jobs) {
+        const r = res.find(x => x.out === j.wav);
+        if (!r || !r.ok || !fs.existsSync(j.wav)) { fails.push(`${j.m.path}: ${(r && r.error) || 'Kokoro failed'}`); continue; }
+        if (j.wav !== j.out) {
+          const c = await run('ffmpeg', ['-y', '-loglevel', 'error', '-i', j.wav, j.out], { timeout: 120000 });
+          if (c.code !== 0) { fails.push(`${j.m.path}: ffmpeg ${c.err.slice(-120)}`); continue; }
+          try { fs.renameSync(j.wav + '.words.json', j.out + '.words.json'); } catch {}
+          for (const f of [j.wav, j.wav.replace(/\.wav$/, '.srt')]) fs.rm(f, { force: true }, () => {});
+        }
+        j.m.done = true; done++; used.add(`kokoro (${kv})`);
+      }
+    }
+
+    // 2) Edge TTS lines
+    for (const m of plan.filter(x => x.engine === 'edge')) {
+      onProgress({ done, total: missing.length, current: m.path });
+      const out = path.join(state.dir, m.path);
+      const args = ['-m', 'tools.audio.edge_tts', 'synth', '--text', m.text, '--out', out.replace(/\.\w+$/, '.mp3')];
+      if (voice) args.push('--voice', voice); else args.push('--dialect', dialect, '--gender', gender);
+      if (rate) args.push('--rate', rate);
+      const r = await run(py, args, { cwd: this.om.root, timeout: 120000, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+      const mp3 = out.replace(/\.\w+$/, '.mp3');
+      if (r.code === 0 && fs.existsSync(mp3)) {
+        if (mp3 !== out) { // manifest asked for .wav etc → convert so the path stays valid
+          await run('ffmpeg', ['-y', '-loglevel', 'error', '-i', mp3, out], { timeout: 120000 });
+          try { fs.renameSync(mp3 + '.words.json', out + '.words.json'); } catch {}
+        }
+        m.done = true; done++; used.add(`edge_tts (${voice || dialect + ' ' + gender})`);
+      } else fails.push(`${m.path}: ${(r.err || r.out).trim().split('\n').pop()}`);
+    }
+    onProgress({ done, total: missing.length, current: null });
+    // record what really produced the files, so the next agent turn and the review see the truth
+    try {
+      const mf = path.join(state.dir, 'artifacts', 'asset_manifest.json');
+      const j = JSON.parse(fs.readFileSync(mf, 'utf8'));
+      for (const a of j.assets || []) {
+        const m = plan.find(x => x.path === a.path && x.done);
+        if (!m) continue;
+        const tool = m.engine === 'kokoro' ? 'hyperframes_kokoro' : 'edge_tts';
+        a.provider = tool; a.source_tool = tool; a.generated_by = 'OpenMontage Studio (missing narration repair)';
+      }
+      fs.writeFileSync(mf, JSON.stringify(j, null, 2));
+    } catch {}
+    this.projects.notes = this.projects.notes || {};
+    (this.projects.notes[state.project_id] = this.projects.notes[state.project_id] || []).push(
+      `${done} narration file(s) listed in asset_manifest.json were missing on disk (the planned TTS provider never produced them). The studio generated them with ${[...used].join(' + ')} at the same paths, with .words.json timings. Verify durations before compose.`);
+    if (fails.length) throw new Error(`${done}/${missing.length} generated. Failed: ${fails.slice(0, 3).join(' | ')}`);
+    return { generated: done, engines: [...used] };
+  }
+
   /** Short voice preview for the settings page. Returns MP3 bytes. */
   async preview({ text, voice, dialect, gender, rate }) {
     const py = this.venvPython();

@@ -23,18 +23,21 @@
       h('button.btn.ghost.sm.icon.nodrag', { title: t('Projects'), onclick: () => app.go('projects') }, icon('layout')),
       h('div', titleEl, pipeEl), stagebar, costEl,
       h('div.nodrag', { style: { display: 'flex', gap: '6px' } },
+        h('div', { style: { position: 'relative' } }, h('button.btn.sm.primary', { onclick: (e) => exportMenu(e.currentTarget.parentElement) }, icon('download'), 'Export')),
+        h('button.btn.sm', { title: 'Voice, captions, 448 blocks, background removal, website capture, review', onclick: () => HFToolsUI.open({ id: S.id, files: () => (S.st && S.st.files) || [], send: (text) => sendMessage(text) }) }, icon('wand'), t('HyperFrames tools')),
         h('button.btn.sm', { onclick: () => window.om.projects.reveal(S.id) }, icon('folder'), t('Open folder')),
         h('button.btn.sm', { onclick: () => window.om.repo.backlot(S.id).catch(e => toast(e.message, 'err')) }, icon('ext'), t('Backlot board'))));
 
     // chat
     const msgs = h('div.msgs');
     const agentPick = h('div.agent-pick');
+    const modelPick = h('div.agent-pick.model-pick');
     const focusbar = h('div.focusbar');
     const ta = h('textarea', { placeholder: t('Ask the agent to change anything…'), rows: 3 });
     const sendBtn = h('button.btn.primary.sm.send', icon('send'), t('Send'));
     const attachBtn = h('button.btn.ghost.sm.icon', { title: 'Attach files' }, icon('clip'));
     const chat = h('div.chat',
-      h('div.chat-head', agentPick, h('div', { style: { flex: 1 } }),
+      h('div.chat-head', agentPick, modelPick, h('div', { style: { flex: 1 } }),
         h('button.btn.ghost.sm.icon', { title: t('New chat'), onclick: newChat }, icon('broom'))),
       msgs,
       h('div.chat-comp', focusbar, ta, h('div.foot', attachBtn, UI.mic(ta, { send: () => sendBtn.click() }), h('span.muted', { style: { fontSize: '11px' } }, '⏎ send · ⇧⏎ newline'), sendBtn)));
@@ -48,8 +51,10 @@
     const board = h('div.board', layer);
     const zoomLbl = h('span.z');
     const gate = h('div.gate.hidden');
+    const voiceEl = h('div.gate.voice.hidden');
+    const jobEl = h('div.job.hidden');
     const empty = h('div.board-empty.hidden');
-    const boardWrap = h('div.board-wrap', board, gate, empty,
+    const boardWrap = h('div.board-wrap', board, h('div.banners', gate, voiceEl), jobEl, empty,
       h('div.board-tools',
         h('button.btn.ghost.sm.icon', { title: 'Zoom out', onclick: () => zoomBy(1 / 1.2) }, icon('minus')), zoomLbl,
         h('button.btn.ghost.sm.icon', { title: 'Zoom in', onclick: () => zoomBy(1.2) }, icon('plus')),
@@ -62,16 +67,53 @@
 
     // timeline
     const screen = h('div.screen', icon('film'));
+    const pvHead = h('div.pv-head');
     const playBtn = h('button.btn.sm.icon', { onclick: togglePlay }, icon('play'));
     const timeEl = h('span.time', '0:00 / 0:00');
     const tlMain = h('div.tl-main');
-    const tlToggle = h('button.btn.ghost.sm.icon', { onclick: () => { S.tlCollapsed = !S.tlCollapsed; tl.classList.toggle('collapsed', S.tlCollapsed); } }, icon('down'));
+    const tlToggle = h('button.btn.ghost.sm.icon.tl-toggle', { onclick: () => setTlCollapsed(!S.tlCollapsed) });
+    const tlResize = h('div.tl-resize', { title: 'Drag to resize · double-click to hide/show' });
     const tl = h('div.tl',
-      h('div.player', screen, h('div.ctrl', playBtn, h('button.btn.ghost.sm', { onclick: () => seek(0) }, '⏮'), timeEl, tlToggle)),
+      tlResize,
+      h('div.player', pvHead, screen, h('div.ctrl', playBtn, h('button.btn.ghost.sm', { onclick: () => seek(0) }, '⏮'), timeEl, tlToggle)),
       tlMain);
+    function setTlCollapsed(v) {
+      S.tlCollapsed = v;
+      tl.classList.toggle('collapsed', v);
+      tl.style.height = v ? '' : (S.tlHeight ? S.tlHeight + 'px' : '');
+      tlToggle.replaceChildren(icon(v ? 'up' : 'down'));
+      tlToggle.title = v ? 'Show player and timeline' : 'Hide player and timeline';
+      try { localStorage.setItem('tlCollapsed', v ? '1' : '0'); } catch {}
+      if (!v && S.st) requestAnimationFrame(() => renderTimeline());
+    }
+    S.tlHeight = Number(localStorage.getItem('tlHeight')) || 0;
+    tlResize.ondblclick = () => setTlCollapsed(!S.tlCollapsed);
+    tlResize.onpointerdown = (e) => {
+      e.preventDefault();
+      const startY = e.clientY, startH = tl.getBoundingClientRect().height;
+      const max = Math.max(160, window.innerHeight - 220);
+      let moved = false;
+      tlResize.setPointerCapture(e.pointerId);
+      tl.classList.add('resizing');
+      tlResize.onpointermove = (ev) => {
+        const nh = Math.round(startH + (startY - ev.clientY));
+        if (Math.abs(startY - ev.clientY) > 3) moved = true;
+        if (!moved) return;
+        if (nh < 90) { if (!S.tlCollapsed) setTlCollapsed(true); return; }
+        if (S.tlCollapsed) setTlCollapsed(false);
+        S.tlHeight = Math.min(max, Math.max(150, nh));
+        tl.style.height = S.tlHeight + 'px';
+      };
+      tlResize.onpointerup = () => {
+        tlResize.onpointermove = tlResize.onpointerup = null;
+        tl.classList.remove('resizing');
+        if (moved && !S.tlCollapsed) { try { localStorage.setItem('tlHeight', String(S.tlHeight)); } catch {} if (S.st) renderTimeline(); }
+      };
+    };
 
     const ws = h('div.ws', top, chat, boardWrap, insp, tl);
     root.replaceChildren(ws);
+    setTlCollapsed(localStorage.getItem('tlCollapsed') === '1');
 
     // ---------------- data ----------------
     async function refresh(force) {
@@ -80,6 +122,8 @@
         S.st = st;
         if (!Object.keys(S.layout).length || force) S.layout = st.layout || {};
         renderTop(); renderBoard(); renderGate(); renderTimeline(); renderInspector();
+        checkVoice().then(() => renderTimeline());
+        loadPreview();
         if (!S.fitted && S.nodes.size) { S.fitted = true; fit(); }
       } catch (e) {
         toast(e.message, 'err');
@@ -331,8 +375,8 @@
       if (S.sel.has(id) && additive) S.sel.delete(id); else S.sel.add(id);
       selectionChanged();
       if (id.startsWith('scene:')) {
-        const sc = S.nodes.get(id).n.data;
-        if (!S.playing) seek(sc.start_seconds || 0);
+        const sc = modelScenes().find(x => 'scene:' + x.id === id);
+        if (sc && !S.playing) seek(sc.start);
       }
     }
     function selectionChanged() {
@@ -393,6 +437,8 @@
             h('dt', 'Type'), h('dd', d.type || '—'), v ? h('dt', 'Model') : null, v ? h('dd', v.model || v.source_tool || '—') : null,
             v && v.cost_usd != null ? h('dt', 'Cost') : null, v && v.cost_usd != null ? h('dd', '$' + v.cost_usd) : null,
             d.shot_language ? h('dt', 'Shot') : null, d.shot_language ? h('dd', [d.framing, d.movement].filter(Boolean).join(' · ') || String(d.shot_language)) : null),
+          h('div.quick', h('button.btn.sm', { onclick: () => playScene(d.id) }, icon('play'), 'Play scene'),
+            h('button.btn.sm', { onclick: () => startExport({ sceneId: d.id }) }, icon('download'), 'Export scene')),
           planIdx >= 0 ? editable('Scene description', d.description, (val) => window.om.projects.patch(S.id, 'artifacts/scene_plan.json', `scenes.${planIdx}.description`, val)) : null,
           v && v.prompt ? h('label.field', 'Generation prompt', h('div.mono', { style: { color: 'var(--text-2)' } }, v.prompt)) : null,
           h('div', h('div.muted', { style: { marginBottom: '8px' } }, t('Edit with agent')),
@@ -422,44 +468,149 @@
       insp.replaceChildren(h('div.ih', n.title, h('div', { style: { flex: 1 } }), h('button.btn.ghost.sm.icon', { onclick: () => { S.sel.clear(); selectionChanged(); } }, icon('x'))), h('div.ib', body));
     }
 
-    // ---------------- timeline + player ----------------
-    function duration() {
-      const sb = S.st && S.st.storyboard;
-      if (!sb) return 0;
-      return sb.total_duration_seconds || Math.max(0, ...(sb.scenes || []).map(s => s.end_seconds || 0));
+    // ---------------- timeline + player (HyperFrames) ----------------
+    // The player shows the agent's HyperFrames composition when one exists, otherwise a draft cut
+    // the studio builds from the scenes, narration, music and captions (rebuilt when files change).
+    let player = null, pvSig = '', pvLoading = false;
+    const pvModel = () => (S.pv && S.pv.model) || null;
+    function modelScenes() {
+      const m = pvModel();
+      if (m) return m.scenes;
+      return ((S.st.storyboard && S.st.storyboard.scenes) || []).map(s => ({ id: s.id, start: s.start_seconds || 0, end: s.end_seconds || 0, visual: s.visual && s.visual.exists ? { path: s.visual.path, type: s.visual.type } : null, title: s.description }));
     }
-    function finalRender() { const r = S.st && S.st.media && S.st.media.renders; return r && r.length ? r[0].path : null; }
+    function duration() {
+      if (player && isFinite(player.duration) && player.duration > 0) return player.duration;
+      const m = pvModel();
+      if (m) return m.duration;
+      const sb = S.st && S.st.storyboard;
+      return sb ? (sb.total_duration_seconds || Math.max(0, ...(sb.scenes || []).map(s => s.end_seconds || 0))) : 0;
+    }
+    function previewSignature() {
+      const st = S.st;
+      const sc = ((st.storyboard && st.storyboard.scenes) || []).map(s => [s.id, s.start_seconds, s.end_seconds, s.visual && s.visual.path, s.visual && s.visual.exists, s.narration]);
+      const files = (st.files || []).filter(f => !/^(\.studio|renders)\//.test(f.path)).map(f => f.path + ':' + Math.round(f.mtime));
+      return JSON.stringify([sc, files, S.preferDraft, (st.artifacts.asset_manifest || {}).assets && st.artifacts.asset_manifest.assets.length]);
+    }
+    async function loadPreview(force) {
+      if (!S.st) return;
+      const sig = previewSignature();
+      if ((!force && sig === pvSig) || pvLoading) return;
+      const hasScenes = ((S.st.storyboard && S.st.storyboard.scenes) || []).length > 0;
+      pvSig = sig;
+      if (!hasScenes) { S.pv = null; player = null; screen.replaceChildren(h('div.muted', { style: { textAlign: 'center', fontSize: '11px', padding: '10px' } }, 'The preview appears as soon as the scene plan exists.')); renderPlayerHead(); return; }
+      pvLoading = true;
+      try {
+        S.pv = await window.om.hf.preview(S.id, { prefer: S.preferDraft ? 'draft' : undefined });
+        mountPlayer(screen, S.pv.url, (p) => { player = p; });
+        renderTimeline(); renderPlayerHead();
+      } catch (e) {
+        screen.replaceChildren(h('div.muted', { style: { padding: '10px', fontSize: '11px' } }, 'Preview failed: ' + e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')));
+      } finally { pvLoading = false; }
+    }
 
-    let video = null;
+    function mountPlayer(host, url, onReady, { big } = {}) {
+      if (!window.customElements || !customElements.get('hyperframes-player')) {
+        host.replaceChildren(h('div.muted', { style: { padding: '10px' } }, 'HyperFrames player is not installed (npm install).'));
+        return null;
+      }
+      const keep = S.time || 0;
+      const p = document.createElement('hyperframes-player');
+      p.setAttribute('src', url + '&v=' + Date.now());
+      p.setAttribute('controls', '');
+      p.setAttribute('no-load-timeout', '');
+      if (!big) p.setAttribute('low-power-idle', '');
+      p.style.cssText = 'display:block;width:100%;height:100%;';
+      p.addEventListener('ready', () => { if (keep && !big) { try { p.seek(keep); } catch {} } });
+      if (!big) {
+        p.addEventListener('timeupdate', () => { S.time = p.currentTime || 0; updatePlayhead(); });
+        p.addEventListener('play', () => { S.playing = true; playBtn.replaceChildren(icon('pause')); });
+        p.addEventListener('pause', () => { S.playing = false; playBtn.replaceChildren(icon('play')); });
+        p.addEventListener('ended', () => { S.playing = false; playBtn.replaceChildren(icon('play')); });
+      }
+      p.addEventListener('error', (e) => toast('Preview error: ' + ((e.detail && e.detail.message) || 'could not load'), 'err'));
+      host.replaceChildren(p);
+      if (onReady) onReady(p);
+      return p;
+    }
+
+    function renderPlayerHead() {
+      const src = S.pv ? S.pv.source : null;
+      const label = src === 'composition' ? 'Agent composition' : src === 'draft' ? 'Draft cut' : 'No preview yet';
+      const kids = [h('span.badge.' + (src === 'composition' ? 'ok' : 'gray'), label)];
+      if (S.pv && (S.pv.hasComposition || S.pv.hasDraftAlternative)) {
+        kids.push(h('button.btn.ghost.sm', { title: 'Switch preview source', onclick: () => { S.preferDraft = !S.preferDraft; loadPreview(true); } }, S.preferDraft ? 'Use composition' : 'Use draft'));
+      }
+      if (S.range) kids.push(h('span.pill.active', { title: 'Playing one scene' }, S.range.id, h('button', { style: { background: 'none', border: 0, color: 'inherit', cursor: 'pointer' }, onclick: clearRange }, '×')));
+      kids.push(h('div', { style: { flex: 1 } }));
+      kids.push(h('button.btn.ghost.sm.icon', { title: 'Big preview', onclick: openBigPreview, disabled: !S.pv }, icon('fit')));
+      pvHead.replaceChildren(...kids);
+    }
+
+    function playScene(sceneId) {
+      const sc = modelScenes().find(s => s.id === sceneId);
+      if (!sc || !player) return;
+      S.range = { id: sceneId, start: sc.start, end: sc.end };
+      player.setAttribute('range-start', String(sc.start));
+      player.setAttribute('range-end', String(sc.end));
+      try { player.seek(sc.start); player.play(); } catch {}
+      renderPlayerHead();
+    }
+    function clearRange() {
+      S.range = null;
+      if (player) { player.removeAttribute('range-start'); player.removeAttribute('range-end'); }
+      renderPlayerHead();
+    }
+
+    function openBigPreview() {
+      if (!S.pv) return;
+      const host = h('div', { style: { width: '100%', aspectRatio: pvModel() ? `${pvModel().width}/${pvModel().height}` : '16/9', maxHeight: '70vh', background: '#000', borderRadius: '12px', overflow: 'hidden', margin: '0 auto' } });
+      if (player) player.pause();
+      const sceneSel = [...S.sel].find(id => id.startsWith('scene:'));
+      UI.modal({
+        title: `${S.st.title || S.id} — ${S.pv.source === 'composition' ? 'Agent composition' : 'Draft cut'}`, wide: true,
+        body: [host, h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end' } },
+          sceneSel ? h('button.btn', { onclick: () => startExport({ sceneId: sceneSel.slice(6) }) }, icon('download'), 'Export this scene') : null,
+          h('button.btn.primary', { onclick: () => startExport({}) }, icon('download'), 'Export video'))],
+      });
+      setTimeout(() => {
+        const p = mountPlayer(host, S.pv.url, null, { big: true });
+        if (p && S.range) { p.setAttribute('range-start', String(S.range.start)); p.setAttribute('range-end', String(S.range.end)); }
+        if (p) p.addEventListener('ready', () => { try { p.seek(S.range ? S.range.start : (S.time || 0)); p.play(); } catch {} });
+      }, 30);
+    }
+
     function renderTimeline() {
       const dur = duration();
       const pps = 40 * S.tlZoom;
       const width = Math.max(tlMain.clientWidth - 4, OFF + dur * pps + 40);
-      const scenes = (S.st.storyboard && S.st.storyboard.scenes) || [];
-      const sections = (S.st.artifacts.script && S.st.artifacts.script.sections) || [];
+      const scenes = modelScenes();
+      const m = pvModel();
       const ruler = h('div.ruler', { style: { width: width + 'px' } });
       const step = dur > 120 ? 10 : dur > 40 ? 5 : 2;
       for (let s = 0; s <= dur + 0.01; s += step) ruler.appendChild(h('span', { style: { left: (OFF + s * pps) + 'px' } }, fmtTime(s)));
+      const pos = (a, b) => ({ left: (OFF + a * pps) + 'px', width: Math.max(6, (b - a) * pps - 2) + 'px' });
       const vt = h('div.track', { style: { width: width + 'px' } }, h('span.lbl', 'Video'));
       for (const sc of scenes) {
         const v = sc.visual;
-        const c = h('div.clip', { 'data-id': 'scene:' + sc.id, style: { left: (OFF + (sc.start_seconds || 0) * pps) + 'px', width: Math.max(8, ((sc.end_seconds || 0) - (sc.start_seconds || 0)) * pps - 2) + 'px',
-          backgroundImage: v && v.exists && v.type === 'image' ? `url("${window.om.media(S.id, v.path)}")` : '' },
-          onclick: (e) => { e.stopPropagation(); select('scene:' + sc.id, e.shiftKey); seek(sc.start_seconds || 0); } }, h('span', sc.id));
+        const c = h('div.clip' + (v ? '' : '.card-clip'), { 'data-id': 'scene:' + sc.id, title: sc.title || sc.id,
+          style: { ...pos(sc.start, sc.end), backgroundImage: v && v.type === 'image' ? `url("${window.om.media(S.id, v.path)}")` : '' },
+          onclick: (e) => { e.stopPropagation(); select('scene:' + sc.id, e.shiftKey); seek(sc.start); },
+          ondblclick: (e) => { e.stopPropagation(); playScene(sc.id); } }, h('span', sc.id));
         if (S.sel.has('scene:' + sc.id)) c.classList.add('sel');
         vt.appendChild(c);
       }
-      const nt = h('div.track.sm', { style: { width: width + 'px' } }, h('span.lbl', 'Voice'));
-      for (const s of sections) nt.appendChild(h('div.clip.narr', { title: s.text, style: { left: (OFF + (s.start_seconds || 0) * pps) + 'px', width: Math.max(8, ((s.end_seconds || 0) - (s.start_seconds || 0)) * pps - 2) + 'px' } }, h('span', s.text)));
-      const music = (S.st.media && S.st.media.music) || [];
+      const capT = h('div.track.sm', { style: { width: width + 'px' } }, h('span.lbl', 'Captions'));
+      for (const c of (m && m.captions) || []) capT.appendChild(h('div.clip.cap-clip', { title: c.text, style: pos(c.start, c.end) }, h('span', { dir: 'auto' }, c.text)));
+      const voT = h('div.track.sm', { style: { width: width + 'px' } }, h('span.lbl', 'Voice'));
+      const voices = ((m && m.audio) || []).filter(a => a.kind === 'voice');
+      if (voices.length) for (const a of voices) voT.appendChild(h('div.clip.narr', { title: a.path, style: pos(a.start, a.start + (a.duration || 3)) }, h('span', a.path.split('/').pop())));
+      else if (S.missingVoice && S.missingVoice.length) voT.appendChild(h('div.clip.narr.missing', { style: pos(0, Math.max(1, dur)) }, h('span', `${S.missingVoice.length} voiceover files missing`)));
+      const music = ((m && m.audio) || []).filter(a => a.kind === 'music');
       const mt = music.length ? h('div.track.sm', { style: { width: width + 'px' } }, h('span.lbl', 'Music'),
-        h('div.clip.music', { style: { left: OFF + 'px', width: Math.max(8, dur * pps) + 'px' } }, h('span', music[0].path.split('/').pop()))) : null;
+        h('div.clip.music', { style: pos(0, dur) }, h('span', music[0].path.split('/').pop()))) : null;
       const ph = h('div.playhead');
-      const inner = h('div', { style: { position: 'relative', width: width + 'px', minHeight: '100%' } }, ruler, vt, nt, mt, ph);
-      const scrub = (e) => {
-        const r = inner.getBoundingClientRect();
-        seek(Math.max(0, Math.min(dur, (e.clientX - r.left - OFF) / pps)));
-      };
+      const inner = h('div', { style: { position: 'relative', width: width + 'px', minHeight: '100%' } }, ruler, vt, capT, voT, mt, ph);
+      const scrub = (e) => { const r = inner.getBoundingClientRect(); seek(Math.max(0, Math.min(dur, (e.clientX - r.left - OFF) / pps))); };
       ruler.addEventListener('mousedown', (e) => {
         scrub(e);
         const mv = (ev) => scrub(ev);
@@ -468,69 +619,108 @@
       });
       tlMain.replaceChildren(inner);
       tlMain.onwheel = (e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); S.tlZoom = Math.min(6, Math.max(0.25, S.tlZoom * Math.exp(-e.deltaY * 0.01))); renderTimeline(); } };
-
-      // player source
-      const fr = finalRender();
-      if (fr) {
-        const src = window.om.media(S.id, fr);
-        if (!video || video.dataset.src !== src) {
-          video = h('video', { src, preload: 'metadata', 'data-src': src });
-          video.addEventListener('timeupdate', () => { S.time = video.currentTime; updatePlayhead(); });
-          video.addEventListener('ended', () => { S.playing = false; playBtn.replaceChildren(icon('play')); });
-          video.addEventListener('loadedmetadata', updatePlayhead);
-          screen.replaceChildren(video);
-        }
-      } else {
-        video = null;
-        screen.replaceChildren(scenes.length ? h('div') : h('div.muted', { style: { textAlign: 'center', fontSize: '11px', padding: '10px' } }, 'The preview appears as soon as scenes exist.'));
-      }
       updatePlayhead();
     }
 
     function updatePlayhead() {
-      const dur = video && isFinite(video.duration) ? video.duration : duration();
       const pps = 40 * S.tlZoom;
       const ph = tlMain.querySelector('.playhead');
       if (ph) ph.style.left = (OFF + S.time * pps) + 'px';
-      timeEl.textContent = `${fmtTime(S.time)} / ${fmtTime(dur)}`;
-      if (!video) {
-        const sc = ((S.st.storyboard && S.st.storyboard.scenes) || []).find(s => S.time >= (s.start_seconds || 0) && S.time < (s.end_seconds || 0)) || null;
-        const key = sc ? sc.id : '';
-        if (screen.dataset.scene !== key) {
-          screen.dataset.scene = key;
-          const kids = [];
-          if (sc && sc.visual && sc.visual.exists) kids.push(sc.visual.type === 'video' ? h('video', { src: window.om.media(S.id, sc.visual.path), muted: true, autoplay: S.playing }) : h('img', { src: window.om.media(S.id, sc.visual.path) }));
-          else if (sc) kids.push(h('div.muted', { style: { padding: '10px', textAlign: 'center' } }, sc.description || sc.id));
-          if (sc && sc.narration) kids.push(h('div.cap', sc.narration));
-          if (kids.length) screen.replaceChildren(...kids);
-        }
-      }
+      timeEl.textContent = `${fmtTime(S.time)} / ${fmtTime(duration())}`;
     }
 
-    let animTimer = null;
     function togglePlay() {
-      if (video) {
-        if (video.paused) { video.play(); S.playing = true; playBtn.replaceChildren(icon('pause')); }
-        else { video.pause(); S.playing = false; playBtn.replaceChildren(icon('play')); }
-        return;
-      }
-      if (S.playing) { S.playing = false; clearInterval(animTimer); playBtn.replaceChildren(icon('play')); return; }
-      const dur = duration();
-      if (!dur) return;
-      if (S.time >= dur) S.time = 0;
-      S.playing = true; playBtn.replaceChildren(icon('pause'));
-      let last = performance.now();
-      animTimer = setInterval(() => {
-        const now = performance.now();
-        S.time += (now - last) / 1000; last = now;
-        if (S.time >= dur) { S.time = dur; S.playing = false; clearInterval(animTimer); playBtn.replaceChildren(icon('play')); }
-        updatePlayhead();
-      }, 50);
+      if (!player) return;
+      try { if (S.playing) player.pause(); else player.play(); } catch {}
     }
     function seek(sec) {
       S.time = sec;
-      if (video) { try { video.currentTime = sec; } catch {} }
+      if (player) { try { player.seek(sec); } catch {} }
       updatePlayhead();
+    }
+
+    // ---------------- export ----------------
+    function exportMenu(anchor) {
+      const sceneSel = [...S.sel].find(id => id.startsWith('scene:'));
+      let quality = localStorage.getItem('exportQuality') || 'standard';
+      const q = h('div', { style: { display: 'flex', gap: '4px', padding: '4px 8px 8px' } },
+        ...[['draft', 'Fast'], ['standard', 'Standard'], ['high', 'High']].map(([v, l]) => h('span.pill' + (quality === v ? '.active' : ''), {
+          onclick: (e) => { e.stopPropagation(); quality = v; localStorage.setItem('exportQuality', v); q.querySelectorAll('.pill').forEach(x => x.classList.toggle('active', x.textContent === l)); },
+        }, l)));
+      const menu = h('div.menu', { style: { right: '0', left: 'auto', minWidth: '280px' } },
+        h('div.mh', 'Export'),
+        h('div.mi', { onclick: () => startExport({ quality }) }, icon('film'), h('div', h('div', 'Full video · MP4'), h('div.sub2', S.pv && S.pv.source === 'composition' ? 'Renders the agent composition' : 'Renders the draft cut (scenes + voice + music + captions)'))),
+        h('div.mi' + (sceneSel ? '' : '.disabled'), { onclick: () => sceneSel && startExport({ sceneId: sceneSel.slice(6), quality }) }, icon('image'),
+          h('div', h('div', sceneSel ? `Selected scene · ${sceneSel.slice(6)}` : 'Selected scene'), h('div.sub2', sceneSel ? 'Just this scene, with its voice, music and captions' : 'Select a scene on the canvas first'))),
+        h('div.mi', { onclick: () => startExport({ quality, format: 'gif' }) }, icon('spark'), h('div', h('div', 'GIF'), h('div.sub2', 'Looping preview for chats and docs'))),
+        h('div.mh', 'Quality'), q);
+      anchor.appendChild(menu);
+      const off = (e) => { if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('mousedown', off); } };
+      setTimeout(() => document.addEventListener('mousedown', off), 0);
+    }
+
+    async function startExport({ sceneId, quality, format }) {
+      document.querySelectorAll('.menu').forEach(m => m.remove());
+      if (S.job) return toast('An export is already running.', 'err');
+      try {
+        const r = await window.om.hf.export({ projectId: S.id, sceneId, quality: quality || localStorage.getItem('exportQuality') || 'standard', format: format || 'mp4', source: S.preferDraft ? 'draft' : 'auto' });
+        S.job = { jobId: r.jobId, sceneId, pct: 1, message: 'Preparing' };
+        renderJob();
+      } catch (e) { toast(e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'err'); }
+    }
+
+    function renderJob() {
+      const j = S.job;
+      jobEl.classList.toggle('hidden', !j);
+      if (!j) return;
+      jobEl.replaceChildren(icon('download'),
+        h('div', { style: { flex: 1, minWidth: 0 } },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '10px' } }, h('b', j.sceneId ? `Exporting ${j.sceneId}` : 'Exporting video'), h('span.mono', Math.round(j.pct || 0) + '%')),
+          h('div.rail', { style: { marginTop: '6px' } }, h('i.completed', { style: { flex: 'none', width: Math.max(2, j.pct || 0) + '%' } }), h('i', { style: { flex: 1 } })),
+          h('div.muted', { style: { fontSize: '11px', marginTop: '4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, j.message || '')),
+        h('button.btn.ghost.sm', { onclick: () => window.om.hf.cancel(j.jobId) }, t('Cancel')));
+    }
+
+    function onExportProgress(ev) {
+      if (ev.projectId !== S.id || !S.job || ev.jobId !== S.job.jobId) return;
+      if (ev.done) {
+        S.job = null; renderJob();
+        if (ev.error) { if (ev.error !== 'Cancelled') toast('Export failed: ' + ev.error, 'err'); else toast('Export cancelled'); return; }
+        toast('Exported: ' + ev.rel);
+        window.om.projects.reveal(S.id, ev.rel);
+        refresh();
+        return;
+      }
+      S.job = { ...S.job, pct: ev.pct != null ? ev.pct : S.job.pct, message: ev.message || S.job.message };
+      renderJob();
+    }
+
+    // ---------------- missing voiceover ----------------
+    async function checkVoice() {
+      try { S.missingVoice = await window.om.voice.missing(S.id); } catch { S.missingVoice = []; }
+      const n = (S.missingVoice || []).length;
+      voiceEl.classList.toggle('hidden', !n);
+      const key = (S.missingVoice || []).map(m => m.path).join('|');
+      if (!n || (key === S.voiceKey && voiceEl.childNodes.length)) { if (!n) S.voiceKey = ''; return; }
+      S.voiceKey = key;
+      const prov = [...new Set(S.missingVoice.map(m => m.provider).filter(Boolean))].join(', ');
+      const picker = await HFToolsUI.voiceFixPicker(S.missingVoice);
+      const sub = h('div.muted', { style: { fontSize: '11.5px' } });
+      const paintSub = () => { sub.textContent = `Planned with ${prov || 'a TTS provider'} but never created. ${picker.note()}`; };
+      picker.el.addEventListener('change', paintSub); paintSub();
+      const go = h('button.btn.sm.primary', { onclick: async () => {
+        go.disabled = true; go.replaceChildren(icon('refresh'), 'Generating…');
+        const off = window.om.voice.onProgress((p) => { if (p.projectId === S.id && p.current) go.replaceChildren(icon('refresh'), p.total ? `${p.done}/${p.total}` : 'Generating…'); });
+        try {
+          const r = await window.om.voice.fix(S.id, picker.value());
+          toast(`Generated ${r.generated} voiceover file(s)${r.engines && r.engines.length ? ' with ' + r.engines.join(' + ') : ''}`);
+          await refresh(); loadPreview(true);
+        } catch (e) { toast(e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'err'); go.disabled = false; go.replaceChildren(icon('mic'), 'Generate free'); }
+        finally { off && off(); }
+      } }, icon('mic'), 'Generate free');
+      voiceEl.replaceChildren(icon('mic'),
+        h('div', { style: { minWidth: '230px', flex: '1 1 260px' } }, h('div.t', `${n} voiceover file${n > 1 ? 's are' : ' is'} missing`), sub),
+        picker.el, go);
     }
 
     // ---------------- chat ----------------
@@ -557,12 +747,67 @@
       const item = (x) => h('div.mi' + (x.installed ? '' : '.disabled'), {
         onclick: () => {
           if (!x.installed) { app.go('agents'); return; }
-          S.agentId = x.id; localStorage.setItem('agent:' + S.id, x.id); renderAgentPick();
+          S.agentId = x.id; localStorage.setItem('agent:' + S.id, x.id); renderAgentPick(); renderModelPick();
         },
       }, h('div.avatar.sm', { style: { background: x.color } }, initials(x.name)),
       h('div', h('div', x.name), h('div.sub2', x.installed ? (x.version || x.cmd) : (x.install || x.cmd))),
       x.id === S.agentId ? icon('check') : null);
       agentPick.replaceChildren(cur);
+    }
+
+    // ---------------- model picker ----------------
+    const modelKey = (agentId) => `model:${S.id}:${agentId}`;
+    function getModel(agentId = S.agentId) {
+      const v = localStorage.getItem(modelKey(agentId));
+      if (v !== null) return v;
+      return localStorage.getItem(`model:*:${agentId}`) || '';
+    }
+    function setModel(m, agentId = S.agentId) {
+      localStorage.setItem(modelKey(agentId), m);
+      localStorage.setItem(`model:*:${agentId}`, m); // new projects start with the last choice
+      if (m) {
+        const a = agentInfo(agentId);
+        if (!(a.models || []).some(x => x.id === m)) {
+          const rk = `modelRecent:${agentId}`;
+          const rec = JSON.parse(localStorage.getItem(rk) || '[]').filter(x => x !== m);
+          localStorage.setItem(rk, JSON.stringify([m, ...rec].slice(0, 6)));
+        }
+      }
+      renderModelPick();
+    }
+    function modelLabel(agentId, m) {
+      if (!m) return 'Default';
+      const x = (agentInfo(agentId).models || []).find(o => o.id === m);
+      return x ? x.label : m;
+    }
+    function renderModelPick() {
+      const a = agentInfo(S.agentId);
+      const cur = getModel();
+      let menu = null;
+      const btn = h('div.cur', { title: 'Model' }, icon('spark'), h('span', modelLabel(S.agentId, cur)), icon('down'));
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        if (menu) { menu.remove(); menu = null; return; }
+        const recent = JSON.parse(localStorage.getItem(`modelRecent:${S.agentId}`) || '[]');
+        const custom = h('input.input.mono', { placeholder: 'model id, e.g. gpt-5-codex', style: { height: '30px' },
+          onclick: (ev) => ev.stopPropagation(),
+          onkeydown: (ev) => { if (ev.key === 'Enter' && custom.value.trim()) { setModel(custom.value.trim()); close(); } } });
+        const item = (id, label, note) => h('div.mi', { onclick: () => { setModel(id); close(); } },
+          h('div', { style: { flex: 1 } }, h('div', label), note ? h('div.sub2', note) : null), (cur || '') === id ? icon('check') : null);
+        menu = h('div.menu', { style: { minWidth: '270px' } },
+          h('div.mh', `${a.name} model`),
+          item('', 'Default', "The CLI's own setting"),
+          ...(a.models || []).map(o => item(o.id, o.label, o.note || o.id)),
+          recent.length ? h('div.mh', 'Recent') : null, ...recent.map(r => item(r, r, 'custom')),
+          h('div.mh', 'Custom'),
+          h('div', { style: { padding: '2px 8px 8px', display: 'flex', gap: '6px' } }, custom,
+            h('button.btn.sm', { onclick: (ev) => { ev.stopPropagation(); if (custom.value.trim()) { setModel(custom.value.trim()); close(); } } }, 'Use')),
+          a.modelArgs ? h('div.muted', { style: { fontSize: '10.5px', padding: '0 8px 6px' } }, `Passed as ${a.modelArgs.join(' ').replace('{model}', '<model>')}`) : null);
+        modelPick.appendChild(menu);
+        setTimeout(() => document.addEventListener('click', close), 0);
+      };
+      const close = () => { if (menu) menu.remove(); menu = null; document.removeEventListener('click', close); };
+      modelPick.replaceChildren(btn);
     }
 
     function renderFocus() {
@@ -585,12 +830,12 @@
         return;
       }
       const stick = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 80;
-      msgs.replaceChildren(...list.map(renderMsg));
+      msgs.replaceChildren(...list.map((m, i) => renderMsg(m, i, list)));
       if (stick || !renderMsgs.once) msgs.scrollTop = msgs.scrollHeight;
       renderMsgs.once = true;
     }
 
-    function renderMsg(m) {
+    function renderMsg(m, idx = 0, list = []) {
       if (m.role === 'user') {
         return h('div.msg.user', (m.focus || []).length ? h('div.focus', m.focus.map(f => h('span', f.length > 50 ? f.slice(0, 50) + '…' : f))) : null, m.text);
       }
@@ -605,18 +850,43 @@
       };
       const stepEl = (p) => p.type === 'tool' ? h('div.tool', h('b', p.name), h('span', p.detail || ''))
         : h('div.tool.res' + (p.isError ? '.err' : ''), h('span', (p.text || '').split('\n')[0] || (p.isError ? 'error' : 'ok')));
+      const questions = [];
+      const textParts = (m.parts || []).filter(p => p.type === 'text');
       for (const p of m.parts || []) {
         if (p.type === 'tool' || p.type === 'tool_result') { steps.push(p); continue; }
         flush();
-        if (p.type === 'text' && p.text.trim()) out.push(h('div.txt', { html: md(p.text) }));
+        if (p.type === 'question') { questions.push(...(p.questions || [])); continue; }
+        if (p.type === 'text' && p.text.trim()) {
+          // structured questions become cards; an unfinished block (still streaming) is hidden
+          const parsed = Questions.parseBlocks(p.text.replace(/<studio-question\b(?![\s\S]*<\/studio-question>)[\s\S]*$/i, ''));
+          questions.push(...parsed.questions.filter(q => q.options.length));
+          if (parsed.text) out.push(h('div.txt', { html: md(parsed.text) }));
+          continue;
+        }
         else if (p.type === 'stderr' && p.text.trim()) out.push(h('div.stderr', p.text.trim().slice(-1200)));
         else if (p.type === 'result') out.push(h('div.result', p.costUsd != null ? h('span', '$' + Number(p.costUsd).toFixed(3)) : null, p.durationMs ? h('span', Math.round(p.durationMs / 1000) + 's') : null, p.isError ? h('span.badge.err', 'error') : null));
         else if (p.type === 'raw') out.push(h('div.tool.res', h('span', p.text)));
       }
       flush();
+      // fallback: a plain-text question with A/B/C or 1/2/3 options at the end of the reply
+      if (!questions.length && m.done && textParts.length) {
+        const loose = Questions.parseLoose(textParts[textParts.length - 1].text);
+        if (loose) questions.push(loose);
+      }
+      if (questions.length) {
+        const answeredLater = list.slice(idx + 1).some(x => x.role === 'user');
+        const ansKey = `ans:${S.id}:${idx}`;
+        let chosen = {};
+        try { chosen = JSON.parse(localStorage.getItem(ansKey) || '{}'); } catch {}
+        out.push(Questions.renderQuestions(questions, {
+          locked: answeredLater || !m.done || S.running, answered: answeredLater, chosen,
+          onAnswer: (text, snapshot) => { localStorage.setItem(ansKey, JSON.stringify(snapshot)); sendMessage(text); },
+        }));
+      }
       if (!m.done) out.push(h('div.typing', h('i'), h('i'), h('i')));
       else if (m.code && m.code !== 0 && !(m.parts || []).some(p => p.type === 'result')) out.push(h('div.tool.err', h('span', `Agent exited with code ${m.code}`)));
-      return h('div.msg.assistant', h('div.who', h('div.avatar.sm', { style: { background: a.color } }, initials(a.name)), a.name), out);
+      return h('div.msg.assistant', h('div.who', h('div.avatar.sm', { style: { background: a.color } }, initials(a.name)), a.name,
+        m.model ? h('span.badge.gray', modelLabel(m.agent, m.model)) : null), out);
     }
 
     function setRunning(r) {
@@ -635,10 +905,10 @@
       const focusLabels = [...S.sel].map(focusLabel);
       try {
         setRunning(true);
-        S.history.messages.push({ role: 'user', text, focus: [...S.sel].map(focusLabel) }, { role: 'assistant', agent: S.agentId, parts: [], done: false });
+        S.history.messages.push({ role: 'user', text, focus: [...S.sel].map(focusLabel) }, { role: 'assistant', agent: S.agentId, model: getModel() || null, parts: [], done: false, ts: Date.now() });
         renderMsgs();
         msgs.scrollTop = msgs.scrollHeight;
-        await window.om.chat.send({ projectId: S.id, agentId: S.agentId, message: text, focus, focusLabels, pipeline: S.st && S.st.pipeline && S.st.pipeline.pipeline_type, title: S.st && S.st.title });
+        await window.om.chat.send({ projectId: S.id, agentId: S.agentId, model: getModel() || undefined, message: text, focus, focusLabels, pipeline: S.st && S.st.pipeline && S.st.pipeline.pipeline_type, title: S.st && S.st.title });
       } catch (e) {
         setRunning(false);
         S.history.messages.pop();
@@ -696,6 +966,7 @@
 
     // ---------------- boot ----------------
     S.unsub.push(window.om.chat.onEvent(onChatEvent));
+    S.unsub.push(window.om.hf.onProgress(onExportProgress));
     S.unsub.push(window.om.projects.onChanged((pid) => { if (pid === S.id) scheduleRefresh(); }));
     const poll = setInterval(() => { if (S.running) refresh(); }, 5000);
     let lastW = 0, roRaf = 0;
@@ -706,6 +977,7 @@
     ro.observe(tlMain);
 
     renderAgentPick();
+    renderModelPick();
     (async () => {
       S.history = await window.om.chat.history(S.id);
       const running = await window.om.chat.running();
@@ -724,9 +996,9 @@
 
     return {
       destroy() {
-        S.unsub.forEach(f => f()); clearInterval(poll); clearInterval(animTimer); ro.disconnect();
+        S.unsub.forEach(f => f()); clearInterval(poll); ro.disconnect();
         document.removeEventListener('keydown', onKey);
-        if (video) video.pause();
+        if (player) { try { player.pause(); } catch {} }
       },
       refreshAgents: renderAgentPick,
     };

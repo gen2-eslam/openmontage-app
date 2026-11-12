@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; img-src 'self' om: data: blob:; media-src 'self' om: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' om:; font-src 'self' data:;" />
+    content="default-src 'self'; img-src 'self' om: data: blob: http://127.0.0.1:*; media-src 'self' om: blob: http://127.0.0.1:*; style-src 'self' 'unsafe-inline'; script-src 'self' file:; connect-src 'self' om: http://127.0.0.1:*; frame-src http://127.0.0.1:*; font-src 'self' data:;" />
   <title>OpenMontage Studio</title>
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
@@ -16,8 +16,11 @@
   <div class="toast-wrap" id="toasts"></div>
   <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../../node_modules/@hyperframes/player/dist/hyperframes-player.global.js"></script>
   <script src="lib.js"></script>
   <script src="mic.js"></script>
+  <script src="questions.js"></script>
+  <script src="hftools.js"></script>
   <script src="workspace.js"></script>
   <script src="app.js"></script>
 </body>
